@@ -7,8 +7,21 @@ async function getByTransferencia(req, res) {
     const resumen = await pool.request()
       .input('tid', sql.Int, req.params.transferencia_id)
       .query(`
-        SELECT * FROM EQRENDICION.V_RENDICION_RESUMEN
-        WHERE transferencia_id = @tid
+        SELECT 
+          r.id                          AS rendicion_id,
+          t.id                          AS transferencia_id,
+          t.codigo                      AS codigo_transferencia,
+          t.monto                       AS monto_transferencia,
+          COALESCE(r.efectivo_en_caja, 0)  AS efectivo_en_caja,
+          COALESCE(
+            (SELECT SUM(g.monto) FROM EQRENDICION.PAE_GASTOS g WHERE g.transferencia_id = t.id),
+            0
+          )                             AS total_gastos_registrados,
+          COALESCE(r.estado, 'borrador')   AS estado,
+          r.enviada_en
+        FROM EQRENDICION.PAE_TRANSFERENCIAS t
+        LEFT JOIN EQRENDICION.PAE_RENDICIONES r ON r.transferencia_id = t.id
+        WHERE t.id = @tid
       `)
 
     const gastos = await pool.request()

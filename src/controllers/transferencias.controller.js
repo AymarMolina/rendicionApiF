@@ -47,6 +47,7 @@ async function getAll(req, res) {
     res.json(rows)
   } catch (err) {
     console.error(err)
+    console.error('ERROR getAll transferencias:', err.message, err.stack)
     res.status(500).json({ error: 'Error al obtener transferencias' })
   }
 }
@@ -110,5 +111,168 @@ async function cambiarEstado(req, res) {
     res.status(500).json({ error: 'Error al actualizar estado' })
   }
 }
+const PDFDocument = require('pdfkit')
 
-module.exports = { getAll, getOne, getRubros, cambiarEstado }
+async function generarActa(req, res) {
+  const { asignacion_id } = req.query
+
+  if (!asignacion_id)
+    return res.status(400).json({ error: 'asignacion_id requerido' })
+
+  try {
+    const pool = await getPool()
+
+    const infoResult = await pool.request()
+      .input('aid', sql.Int, asignacion_id)
+      .query(`
+        SELECT i.nombre AS institucion, i.distrito,
+               c.nombre AS ciclo, c.mes, c.anio,
+               a.monto_total, a.num_transferencias
+        FROM EQRENDICION.PAE_ASIGNACIONES a
+        JOIN EQRENDICION.PAE_INSTITUCIONES i ON i.id = a.institucion_id
+        JOIN EQRENDICION.PAE_CICLOS c        ON c.id = a.ciclo_id
+        WHERE a.id = @aid
+      `)
+
+    if (!infoResult.recordset[0])
+      return res.status(404).json({ error: 'No se encontró la asignación' })
+
+    const info = infoResult.recordset[0]
+
+    const transfResult = await pool.request()
+      .input('aid', sql.Int, asignacion_id)
+      .query(`
+        SELECT numero, monto, fecha_recepcion, estado
+        FROM EQRENDICION.PAE_TRANSFERENCIAS
+        WHERE asignacion_id = @aid
+        ORDER BY numero ASC
+      `)
+
+    const transferencias = transfResult.recordset
+
+    const rubrosResult = await pool.request()
+      .input('aid', sql.Int, asignacion_id)
+      .query(`
+        SELECT v.rubro, 
+               SUM(v.total_gastado)     AS total_gastado,
+               MAX(v.presupuesto_rubro) AS presupuesto_rubro,
+               MIN(v.saldo_rubro)       AS saldo_rubro
+        FROM EQRENDICION.V_GASTO_X_RUBRO v
+        JOIN EQRENDICION.PAE_TRANSFERENCIAS t ON t.id = v.transferencia_id
+        WHERE t.asignacion_id = @aid
+        GROUP BY v.rubro
+        ORDER BY v.rubro
+      `)
+
+    const meses  = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+    const letras = ['a','b','c','d']
+    const ordinal = ['Primera','Segunda','Tercera','Cuarta']
+    const mesNombre = meses[(info.mes - 1)] ?? ''
+    const distrito  = info.distrito ?? '........................................'
+
+    const doc = new PDFDocument({ size: 'A4', margin: 50 })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename=acta-${info.anio}-${String(info.mes).padStart(2,'0')}.pdf`)
+    doc.pipe(res)
+
+    const rowH  = 22
+    const pageW = 495  
+
+    const cell = (x, y, w, h, text, opts = {}) => {
+      doc.rect(x, y, w, h).stroke()
+      doc.fontSize(opts.fs ?? 9)
+         .font(opts.bold ? 'Helvetica-Bold' : 'Helvetica')
+         .fillColor(opts.color ?? 'black')
+         .text(String(text), x + 4, y + (h - (opts.fs ?? 9)) / 2 - 1, {
+           width: w - 8,
+           align: opts.align ?? 'left',
+           lineBreak: false
+         })
+    }
+
+    doc.fontSize(9).font('Helvetica-Bold')
+       .text('FORMATO N°', { align: 'center' })
+       .moveDown(0.4)
+
+    const titleY = doc.y
+    doc.rect(50, titleY, pageW, 28).fillAndStroke('#E07020', '#E07020')
+    doc.fillColor('white').fontSize(11).font('Helvetica-Bold')
+       .text('ACTA DE ASAMBLEA DEL CGAE - RENDICIÓN DE CUENTAS', 50, titleY + 8, {
+         width: pageW, align: 'center'
+       })
+    doc.moveDown(2.2)
+
+    doc.fontSize(10).font('Helvetica').fillColor('black')
+    doc.text(
+      `En el distrito de ${distrito}, siendo las ........... horas del día .......... ` +
+      `de ................. del ${info.anio}, los miembros del Comité de Gestión para ` +
+      `la Alimentación Escolar (CGAE) presentan la rendición de cuentas ante el Comité ` +
+      `de Alimentación Escolar, así como ante las madres y padres de familia (de ser el ` +
+      `caso), presentes en la Institución Educativa N.°`,
+      { align: 'justify' }
+    )
+    doc.text('.........................................................................', { align: 'left' })
+    doc.moveDown(0.6)
+    doc.text(
+      `La rendición de cuentas para la gestión del servicio alimentario corresponde a la ` +
+      `................................. correspondiente al mes de ${mesNombre} del ${info.anio}.`,
+      { align: 'justify' }
+    )
+    doc.moveDown(1.2)
+
+    const tX  = 100
+    const c1  = 210   
+    const c2  = 70   
+    const c3  = 90  
+    const tW  = c1 + c2 + c3
+    let   tY  = doc.y
+
+    doc.rect(tX, tY, tW, rowH).fillAndStroke('#E07020', '#E07020')
+    doc.fillColor('white').fontSize(9).font('Helvetica-Bold')
+       .text('RENDICIÓN DE CUENTAS', tX, tY + 7, { width: tW, align: 'center' })
+    tY += rowH
+
+    cell(tX,        tY, c1 + c2, rowH, 'Monto total destinado por ciclo (mes)')
+    cell(tX+c1+c2,  tY, c3,      rowH,
+      `S/ ${Number(info.monto_total).toLocaleString('es-PE',{minimumFractionDigits:2})}`,
+      { align: 'right' }
+    )
+    tY += rowH
+
+    cell(tX,       tY, c1+c2, rowH, 'Número de transferencias')
+    cell(tX+c1+c2, tY, c3,    rowH, String(info.num_transferencias), { align: 'right' })
+    tY += rowH
+
+    for (let i = 0; i < 4; i++) {
+      const t   = transferencias[i]
+      const lbl = `${letras[i]}.  ${ordinal[i]} Transferencia del ciclo`
+
+      cell(tX,       tY, c1, rowH, lbl, { bold: true })
+      cell(tX+c1,    tY, c2, rowH, 'Monto')
+      cell(tX+c1+c2, tY, c3, rowH,
+        t ? `S/ ${Number(t.monto).toLocaleString('es-PE',{minimumFractionDigits:2})}` : '-',
+        { align: 'right' }
+      )
+      tY += rowH
+
+      cell(tX,       tY, c1, rowH, '')
+      cell(tX+c1,    tY, c2, rowH, 'Fecha')
+      cell(tX+c1+c2, tY, c3, rowH,
+        t?.fecha_recepcion
+          ? new Date(t.fecha_recepcion).toLocaleDateString('es-PE',{day:'2-digit',month:'2-digit',year:'numeric'})
+          : '-',
+        { align: 'right' }
+      )
+      tY += rowH
+    }
+
+    doc.y = tY + 16
+    doc.end()
+
+  } catch (err) {
+    console.error(err)
+    if (!res.headersSent) res.status(500).json({ error: 'Error al generar el acta' })
+  }
+}
+
+module.exports = { getAll, getOne, getRubros, cambiarEstado, generarActa  }
