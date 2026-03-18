@@ -4,6 +4,8 @@ const cors    = require('cors')
 const path    = require('path')
 
 const app = express()
+// ── En tu app.js / index.js agrega: ──
+const actasRoutes = require('./routes/actas.routes')
 
 app.use(cors({ origin: '*', methods: ['GET','POST','PUT','PATCH','DELETE'] }))
 app.use(express.json())
@@ -16,10 +18,15 @@ app.use('/api/transferencias', require('./routes/transferencias.routes'))
 app.use('/api/gastos',         require('./routes/gastos.routes'))
 app.use('/api/rendiciones',    require('./routes/rendiciones.routes'))
 app.use('/api/asignaciones',   require('./routes/asignaciones.routes'))
+app.use('/api/actas', actasRoutes)
 
+app.use('/api/atc', require('./routes/atc.routes'))
+app.use('/api/importar', require('./routes/importar.routes'))  // ← agrega esto
+ app.use('/api/usuarios', require('./routes/usuarios.routes'))
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() })
 })
+app.use('/api/instituciones', require('./routes/instituciones.routes'))
 
 app.use((req, res) => {
   res.status(404).json({ error: `Ruta ${req.method} ${req.path} no encontrada` })
