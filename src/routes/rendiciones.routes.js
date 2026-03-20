@@ -14,7 +14,8 @@ router.get('/:transferencia_id/dj-pdf',           ctrl.generarDJPdf)
 router.patch('/:id/enviar',   roles('tesorero'), ctrl.enviar)
 router.patch('/:id/aprobar',  roles('atc'),      ctrl.aprobar)
 router.patch('/:id/observar', roles('atc'),      ctrl.observar)
-
+router.get('/:transferencia_id/movilidad-pdf', ctrl.generarMovilidadPdf)
 router.get('/:transferencia_id', ctrl.getByTransferencia)
+router.get('/:transferencia_id/recibo-egreso', ctrl.generarReciboEgreso)
 
 module.exports = router

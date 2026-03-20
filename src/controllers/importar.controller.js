@@ -1,8 +1,19 @@
-const { getPool, sql } = require('../config/db')
-const XLSX             = require('xlsx')
+const { getPool, sql }                         = require('../config/db')
+const XLSX                                     = require('xlsx')
+const { calcularFechaLimite, parseExcelDate }  = require('../utils/fechas')  // ← añadir
 
 const ENTREGAS_MESES = [5, 6, 7, 8, 9, 10]
-const NOMBRES_MESES  = ['Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre']
+const NOMBRES_MESES  = ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre']
+
+// Índices 0-based de FECHA_INICIO y FECHA_FIN por entrega en el Excel
+const FECHA_COLS = [
+  { fi: 57, ff: 58 },  // PRIMERA
+  { fi: 59, ff: 60 },  // SEGUNDA
+  { fi: 61, ff: 62 },  // TERCERA
+  { fi: 63, ff: 64 },  // CUARTA
+  { fi: 65, ff: 66 },  // QUINTA
+  { fi: 67, ff: 68 },  // SEXTA
+]
 
 function ultimoDia(anio, mes) {
   return new Date(anio, mes, 0).getDate()
@@ -17,7 +28,6 @@ async function importarTransferencias(req, res) {
   const errores = []
 
   try {
-    // ── 1. Parsear Excel en memoria ───────────────────────────────────────
     const wb   = XLSX.read(req.file.buffer, { type: 'buffer' })
     const ws   = wb.Sheets[wb.SheetNames[0]]
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
@@ -25,26 +35,39 @@ async function importarTransferencias(req, res) {
 
     logs.push(`Excel leído: ${dataRows.length} módulos`)
 
-    // ── 2. Crear/obtener los 6 ciclos en batch ────────────────────────────
-    const cicloIds = {}
+    // Leer fechas de la primera fila — son iguales para todas las IEs
+    const primeraFila    = dataRows[0]
+    const fechasEntregas = FECHA_COLS.map(({ fi, ff }) => ({
+      fecha_inicio: parseExcelDate(primeraFila[fi]),
+      fecha_fin:    parseExcelDate(primeraFila[ff]),
+    }))
+    logs.push(`Fechas: ${fechasEntregas.map(f => `${f.fecha_inicio}→${f.fecha_fin}`).join(' | ')}`)
 
-    // Un solo query para obtener ciclos existentes
+    // Crear/actualizar los 6 ciclos con las fechas reales del Excel
+    const cicloIds = {}
     const ciclosEx = await pool.request()
       .input('anio', sql.SmallInt, anio)
       .query(`SELECT id, mes FROM EQRENDICION.PAE_CICLOS WHERE anio = @anio AND mes BETWEEN 5 AND 10`)
-
     ciclosEx.recordset.forEach(c => {
       const idx = ENTREGAS_MESES.indexOf(c.mes)
       if (idx !== -1) cicloIds[idx] = c.id
     })
 
-    // Crear solo los que faltan
     for (let i = 0; i < 6; i++) {
-      if (cicloIds[i]) continue
       const mes    = ENTREGAS_MESES[i]
       const nombre = `Ciclo ${NOMBRES_MESES[i]} ${anio}`
-      const fi     = `${anio}-${String(mes).padStart(2,'0')}-01`
-      const ff     = `${anio}-${String(mes).padStart(2,'0')}-${String(ultimoDia(anio, mes)).padStart(2,'0')}`
+      const fi     = fechasEntregas[i].fecha_inicio ?? `${anio}-${String(mes).padStart(2,'0')}-01`
+      const ff     = fechasEntregas[i].fecha_fin    ?? `${anio}-${String(mes).padStart(2,'0')}-${String(ultimoDia(anio, mes)).padStart(2,'0')}`
+
+      if (cicloIds[i]) {
+        await pool.request()
+          .input('id', sql.Int,  cicloIds[i])
+          .input('fi', sql.Date, fi)
+          .input('ff', sql.Date, ff)
+          .query(`UPDATE EQRENDICION.PAE_CICLOS SET fecha_inicio=@fi, fecha_fin=@ff WHERE id=@id`)
+        continue
+      }
+
       const ins = await pool.request()
         .input('nombre', sql.VarChar,  nombre)
         .input('anio',   sql.SmallInt, anio)
@@ -56,7 +79,7 @@ async function importarTransferencias(req, res) {
           OUTPUT INSERTED.id VALUES (@nombre,@anio,@mes,@fi,@ff)
         `)
       cicloIds[i] = ins.recordset[0].id
-      logs.push(`  Ciclo ${nombre}: creado`)
+      logs.push(`  Ciclo ${nombre}: creado (${fi} → ${ff})`)
     }
 
     // ── 3. Leer módulos existentes en BD de una sola vez ─────────────────
@@ -350,7 +373,7 @@ async function modulosDeCiclo(req, res) {
 }
 
 async function liberarCiclo(req, res) {
-  const cicloId            = parseInt(req.params.ciclo_id)
+  const cicloId              = parseInt(req.params.ciclo_id)
   const { fecha_envio, modulos } = req.body
 
   if (!fecha_envio)
@@ -358,26 +381,29 @@ async function liberarCiclo(req, res) {
   if (!Array.isArray(modulos) || modulos.length === 0)
     return res.status(400).json({ error: 'Se requiere al menos un módulo' })
 
-  const pool    = await getPool()
-  const creadas = []
+  const pool     = await getPool()
+  const creadas  = []
   const omitidos = []
 
   try {
+    // ── 1. Traer fechas del ciclo para calcular fecha_limite ─────────────
     const cicloRes = await pool.request()
       .input('cid', sql.Int, cicloId)
-      .query(`SELECT anio, mes FROM EQRENDICION.PAE_CICLOS WHERE id = @cid`)
+      .query(`SELECT anio, mes, fecha_inicio, fecha_fin FROM EQRENDICION.PAE_CICLOS WHERE id = @cid`)
 
     if (!cicloRes.recordset[0])
       return res.status(404).json({ error: 'Ciclo no encontrado' })
 
-    const { anio, mes } = cicloRes.recordset[0]
+    const { anio, mes, fecha_inicio, fecha_fin } = cicloRes.recordset[0]
     const mesPad = String(mes).padStart(2,'0')
 
-    // Obtener códigos modulares de todas las asignaciones del ciclo de una vez
+    // ── 2. Obtener códigos modulares de todas las asignaciones ───────────
     const asigIds = modulos.map(m => m.asignacion_id).filter(Boolean)
-    if (!asigIds.length) return res.status(400).json({ error: 'Sin asignaciones válidas' })
+    if (!asigIds.length)
+      return res.status(400).json({ error: 'Sin asignaciones válidas' })
 
     const placeholders = asigIds.map((_, i) => `@id${i}`).join(',')
+
     const reqCods = pool.request()
     asigIds.forEach((id, i) => reqCods.input(`id${i}`, sql.Int, id))
     const codsRes = await reqCods.query(`
@@ -386,10 +412,11 @@ async function liberarCiclo(req, res) {
       JOIN EQRENDICION.PAE_MODULOS m ON m.id = a.modulo_id
       WHERE a.id IN (${placeholders})
     `)
+    // ← aquí se define codMap
     const codMap = {}
     codsRes.recordset.forEach(r => { codMap[r.id] = r.codigo_modular })
 
-    // Obtener transferencias ya existentes para estas asignaciones
+    // ── 3. Obtener transferencias ya existentes ──────────────────────────
     const reqEx = pool.request()
     asigIds.forEach((id, i) => reqEx.input(`id${i}`, sql.Int, id))
     const existRes = await reqEx.query(`
@@ -398,57 +425,68 @@ async function liberarCiclo(req, res) {
       WHERE asignacion_id IN (${placeholders})
       GROUP BY asignacion_id
     `)
+    // ← aquí se define existMap
     const existMap = {}
     existRes.recordset.forEach(r => { existMap[r.asignacion_id] = r.cnt })
 
-    // Procesar cada módulo
+    // ── 4. Procesar cada módulo ──────────────────────────────────────────
     for (const mod of modulos) {
-      const { asignacion_id, num_transferencias, monto_x_transferencia,
-              presup_alimentos, presup_transporte, presup_gas,
-              presup_estipendio, presup_limpieza, presup_otros } = mod
+      const {
+        asignacion_id, num_transferencias, monto_x_transferencia,
+        presup_alimentos, presup_transporte, presup_gas,
+        presup_estipendio, presup_limpieza, presup_otros
+      } = mod
 
       if (!asignacion_id || !num_transferencias || !monto_x_transferencia) {
         omitidos.push(`asignacion ${asignacion_id}: datos incompletos`)
         continue
       }
 
-      // Actualizar presupuestos editados
-      const montoTotal = Number(presup_alimentos||0) + Number(presup_transporte||0) +
-                         Number(presup_gas||0)        + Number(presup_estipendio||0) +
-                         Number(presup_limpieza||0)   + Number(presup_otros||0)
+      // Actualizar presupuestos editados en el modal
+      const montoTotal = Number(presup_alimentos  || 0) + Number(presup_transporte || 0) +
+                         Number(presup_gas         || 0) + Number(presup_estipendio || 0) +
+                         Number(presup_limpieza    || 0) + Number(presup_otros      || 0)
 
       await pool.request()
         .input('id',  sql.Int,           asignacion_id)
-        .input('mt',  sql.Decimal(12,2),  montoTotal)
-        .input('pa',  sql.Decimal(10,2),  Number(presup_alimentos  || 0))
-        .input('ptr', sql.Decimal(10,2),  Number(presup_transporte || 0))
-        .input('pg',  sql.Decimal(10,2),  Number(presup_gas        || 0))
-        .input('pe',  sql.Decimal(10,2),  Number(presup_estipendio || 0))
-        .input('pl',  sql.Decimal(10,2),  Number(presup_limpieza   || 0))
-        .input('po',  sql.Decimal(10,2),  Number(presup_otros      || 0))
+        .input('mt',  sql.Decimal(12,2), montoTotal)
+        .input('pa',  sql.Decimal(10,2), Number(presup_alimentos  || 0))
+        .input('ptr', sql.Decimal(10,2), Number(presup_transporte || 0))
+        .input('pg',  sql.Decimal(10,2), Number(presup_gas        || 0))
+        .input('pe',  sql.Decimal(10,2), Number(presup_estipendio || 0))
+        .input('pl',  sql.Decimal(10,2), Number(presup_limpieza   || 0))
+        .input('po',  sql.Decimal(10,2), Number(presup_otros      || 0))
         .query(`
           UPDATE EQRENDICION.PAE_ASIGNACIONES
-          SET monto_total=@mt, presup_alimentos=@pa, presup_transporte=@ptr,
-              presup_gas=@pg, presup_estipendio=@pe, presup_limpieza=@pl, presup_otros=@po
-          WHERE id=@id
+          SET monto_total        = @mt,
+              presup_alimentos   = @pa,
+              presup_transporte  = @ptr,
+              presup_gas         = @pg,
+              presup_estipendio  = @pe,
+              presup_limpieza    = @pl,
+              presup_otros       = @po
+          WHERE id = @id
         `)
 
-      const codModular = codMap[asignacion_id] ?? asignacion_id
+      const codModular = codMap[asignacion_id] ?? String(asignacion_id)
       const yaExisten  = existMap[asignacion_id] ?? 0
 
-      // Crear transferencias faltantes
+      // ── 5. Crear transferencias faltantes con fecha_limite calculada ───
       for (let t = yaExisten + 1; t <= num_transferencias; t++) {
-        const codigo = `TRF-${anio}-${mesPad}-${codModular}-T${t}`
+        const codigo       = `TRF-${anio}-${mesPad}-${codModular}-T${t}`
+        const fecha_limite = calcularFechaLimite(fecha_inicio, fecha_fin, t, num_transferencias)
+
         await pool.request()
-          .input('aid',    sql.Int,          asignacion_id)
-          .input('codigo', sql.VarChar,      codigo)
-          .input('numero', sql.TinyInt,      t)
+          .input('aid',    sql.Int,           asignacion_id)
+          .input('codigo', sql.VarChar,       codigo)
+          .input('numero', sql.TinyInt,       t)
           .input('monto',  sql.Decimal(12,2), Number(monto_x_transferencia))
           .input('fe',     sql.Date,          fecha_envio)
+          .input('fl',     sql.Date,          fecha_limite)
           .query(`
             INSERT INTO EQRENDICION.PAE_TRANSFERENCIAS
-              (asignacion_id, codigo, numero, monto, fecha_envio)
-            VALUES (@aid, @codigo, @numero, @monto, @fe)
+              (asignacion_id, codigo, numero, monto, fecha_envio, fecha_limite_rendicion)
+            VALUES (@aid, @codigo, @numero, @monto, @fe, @fl)
           `)
         creadas.push(codigo)
       }

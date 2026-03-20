@@ -9,6 +9,7 @@ async function getRendiciones(req, res) {
         SELECT
           r.id                              AS rendicion_id,
           t.id                              AS transferencia_id,
+          t.asignacion_id,                  -- ← necesario para cargar actas
           t.codigo                          AS codigo_transferencia,
           t.monto                           AS monto_transferencia,
           t.numero,

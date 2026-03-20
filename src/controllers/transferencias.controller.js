@@ -1,5 +1,7 @@
 const { getPool, sql } = require('../config/db')
 
+const { calcularFechaLimite }             = require('../utils/fechas')
+
 async function listar(req, res) {
   try {
     const pool = await getPool()
@@ -16,28 +18,35 @@ async function listar(req, res) {
         t.id,
         t.asignacion_id,
         t.codigo,
-        t.numero,                        -- Nro de esta transferencia (1, 2, 3, 4)
-        a.num_transferencias,            -- Total de transferencias de la asignación
+        t.numero,
+        a.num_transferencias_excel          AS num_transferencias,
         t.monto,
         t.fecha_envio,
         t.fecha_recepcion,
         t.estado,
+        t.fecha_limite_rendicion,
+
         -- Ciclo
         c.nombre            AS ciclo,
         c.anio,
         c.mes,
-        -- Módulo / nivel — cada transferencia es de UN nivel
+        c.fecha_inicio      AS ciclo_fecha_inicio,
+        c.fecha_fin         AS ciclo_fecha_fin,
+
+        -- Módulo / nivel
         m.id                AS modulo_id,
         m.codigo_modular,
         m.nivel,
         m.nombre            AS nombre_modulo,
+
         -- Institución
         i.id                AS institucion_id,
         i.nombre            AS institucion,
         i.codigo            AS codigo_ie,
         i.ugel,
         i.distrito,
-        -- Presupuestos de la asignación (por rubro, para ese nivel)
+
+        -- Presupuestos
         a.monto_total,
         a.presup_alimentos,
         a.presup_transporte,
@@ -45,8 +54,23 @@ async function listar(req, res) {
         a.presup_estipendio,
         a.presup_limpieza,
         a.presup_otros,
-        -- Total gastado en esta transferencia
+
+        -- Días restantes al límite
+        DATEDIFF(DAY, CAST(GETDATE() AS DATE), t.fecha_limite_rendicion) AS dias_para_limite,
+
+        -- Ventana de esta transferencia dentro del ciclo
+        DATEADD(DAY,
+          (DATEDIFF(DAY, c.fecha_inicio, c.fecha_fin) / NULLIF(a.num_transferencias_excel, 0)) * (t.numero - 1),
+          c.fecha_inicio
+        ) AS ventana_inicio,
+        DATEADD(DAY,
+          (DATEDIFF(DAY, c.fecha_inicio, c.fecha_fin) / NULLIF(a.num_transferencias_excel, 0)) * t.numero,
+          c.fecha_inicio
+        ) AS ventana_fin,
+
+        -- Total gastado
         COALESCE(SUM(g.monto), 0) AS total_gastado
+
       FROM EQRENDICION.PAE_TRANSFERENCIAS t
       JOIN EQRENDICION.PAE_ASIGNACIONES   a  ON a.id  = t.asignacion_id
       JOIN EQRENDICION.PAE_CICLOS         c  ON c.id  = a.ciclo_id
@@ -56,9 +80,11 @@ async function listar(req, res) {
       LEFT JOIN EQRENDICION.PAE_GASTOS       g  ON g.comprobante_id   = cp.id
       WHERE a.modulo_id IN (${placeholders})
       GROUP BY
-        t.id, t.asignacion_id, t.codigo, t.numero, a.num_transferencias,
+        t.id, t.asignacion_id, t.codigo, t.numero,
+        a.num_transferencias_excel,
         t.monto, t.fecha_envio, t.fecha_recepcion, t.estado,
-        c.nombre, c.anio, c.mes,
+        t.fecha_limite_rendicion,
+        c.nombre, c.anio, c.mes, c.fecha_inicio, c.fecha_fin,
         m.id, m.codigo_modular, m.nivel, m.nombre,
         i.id, i.nombre, i.codigo, i.ugel, i.distrito,
         a.monto_total, a.presup_alimentos, a.presup_transporte, a.presup_gas,
@@ -76,7 +102,18 @@ async function listar(req, res) {
         estipendio: t.presup_estipendio,
         limpieza:   t.presup_limpieza,
         otros:      t.presup_otros,
-      }
+      },
+      deadline: t.fecha_limite_rendicion ? {
+        fecha:          t.fecha_limite_rendicion,
+        dias_restantes: t.dias_para_limite ?? null,
+        ventana_inicio: t.ventana_inicio,
+        ventana_fin:    t.ventana_fin,
+        estado: t.dias_para_limite === null ? 'sin_fecha'
+              : t.dias_para_limite <  0     ? 'vencida'
+              : t.dias_para_limite <= 3     ? 'critica'
+              : t.dias_para_limite <= 7     ? 'proxima'
+              :                              'ok'
+      } : null
     }))
 
     res.json(rows)
@@ -137,4 +174,4 @@ async function rubros(req, res) {
   }
 }
 
-module.exports = { listar, rubros }
+module.exports = { listar, rubros, calcularFechaLimite }

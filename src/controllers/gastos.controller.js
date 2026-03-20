@@ -20,6 +20,7 @@ async function validarPresupuesto(pool, transferenciaId, rubro, montoNuevo, comp
 
   const presupuesto = presResult.recordset[0]?.presupuesto ?? 0
 
+  // -- Gasto total del rubro (todos los comprobantes)
   let gastadoQuery = `
     SELECT COALESCE(SUM(g.monto), 0) AS gastado
     FROM EQRENDICION.PAE_GASTOS g
@@ -28,20 +29,49 @@ async function validarPresupuesto(pool, transferenciaId, rubro, montoNuevo, comp
   `
   if (comprobanteIdExcluir) gastadoQuery += ` AND c.id <> @excluir`
 
+  // -- Gasto DJ del rubro (solo comprobantes sin RUC)
+  let djQuery = `
+    SELECT COALESCE(SUM(g.monto), 0) AS gastado_dj
+    FROM EQRENDICION.PAE_GASTOS g
+    JOIN EQRENDICION.PAE_COMPROBANTES c ON c.id = g.comprobante_id
+    WHERE c.transferencia_id = @tid
+      AND g.rubro = @rubro
+      AND c.tiene_ruc = 0
+  `
+  if (comprobanteIdExcluir) djQuery += ` AND c.id <> @excluir`
+
   const gastadoReq = pool.request()
     .input('tid',   sql.Int,     transferenciaId)
     .input('rubro', sql.VarChar, rubro)
   if (comprobanteIdExcluir) gastadoReq.input('excluir', sql.Int, comprobanteIdExcluir)
 
-  const gastadoResult = await gastadoReq.query(gastadoQuery)
-  const gastado = gastadoResult.recordset[0]?.gastado ?? 0
+  const djReq = pool.request()
+    .input('tid',   sql.Int,     transferenciaId)
+    .input('rubro', sql.VarChar, rubro)
+  if (comprobanteIdExcluir) djReq.input('excluir', sql.Int, comprobanteIdExcluir)
+
+  const [gastadoResult, djResult] = await Promise.all([
+    gastadoReq.query(gastadoQuery),
+    djReq.query(djQuery)
+  ])
+
+  const gastado      = gastadoResult.recordset[0]?.gastado    ?? 0
+  const gastadoDJ    = djResult.recordset[0]?.gastado_dj      ?? 0
+  const limiteDJ     = presupuesto * 0.10
   const saldoDisponible = presupuesto - gastado
+  const limiteDP = presupuesto * 0.10
 
   return {
-    presupuesto, gastado, saldoDisponible,
-    porcentajeUsado: presupuesto > 0 ? ((gastado / presupuesto) * 100).toFixed(1) : 0,
-    excede:      montoNuevo > saldoDisponible,
-    advertencia: saldoDisponible > 0 && (saldoDisponible - montoNuevo) < presupuesto * 0.1
+    presupuesto,
+    gastado,
+    saldoDisponible,
+    porcentajeUsado:    presupuesto > 0 ? +((gastado   / presupuesto) * 100).toFixed(1) : 0,
+    gastadoDJ,
+    limiteDP,
+    saldoDJ:            limiteDP - gastadoDJ,
+    porcentajeDJUsado:  limiteDP  > 0 ? +((gastadoDJ / limiteDP)    * 100).toFixed(1) : 0,
+    excede:             montoNuevo > saldoDisponible,
+    advertencia:        saldoDisponible > 0 && (saldoDisponible - montoNuevo) < presupuesto * 0.1,
   }
 }
 
@@ -143,10 +173,18 @@ async function create(req, res) {
 
     for (const linea of lineas) {
       const presup = await validarPresupuesto(pool, transferencia_id, linea.rubro, linea.monto)
+
       if (presup.excede)
         return res.status(400).json({
           error: `Excede el presupuesto del rubro "${linea.rubro}". Saldo disponible: S/ ${presup.saldoDisponible.toFixed(2)}`,
           presupuesto: presup
+        })
+
+      if (!tieneRuc && (presup.gastadoDJ + linea.monto) > presup.limiteDP)
+        return res.status(400).json({
+          error: `Las Declaraciones Juradas del rubro "${linea.rubro}" no pueden superar el 10% del presupuesto (límite: S/ ${presup.limiteDP.toFixed(2)}, ya usado: S/ ${presup.gastadoDJ.toFixed(2)})`,
+          presupuesto: presup,
+          tipo: 'limite_dj'
         })
     }
 
