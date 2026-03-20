@@ -4,6 +4,9 @@ const archiver         = require('archiver')
 const path             = require('path')
 const fs               = require('fs')
 
+const LOGO_MINISTERIO = path.join(__dirname, '..', 'images', 'logoMidis.png')
+const LOGO_PAE        = path.join(__dirname, '..', 'images', 'logopae.png')
+
 async function getByTransferencia(req, res) {
   try {
     const pool = await getPool()
@@ -793,13 +796,11 @@ async function generarReciboEgreso(req, res) {
     }
     const fmtMonto = (n) => Number(n || 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })
     const montoLetras = (n) => {
-      // Conversión simple — puedes usar librería "number-to-words-es" si quieres más fidelidad
       const entero = Math.floor(n)
       const decimales = Math.round((n - entero) * 100)
       return `SON: ${entero.toLocaleString('es-PE')} CON ${String(decimales).padStart(2,'0')}/100 SOLES`
     }
 
-    // Info completa de la transferencia y rendición
     const infoRes = await pool.request()
       .input('tid', sql.Int, tid)
       .query(`
@@ -863,45 +864,55 @@ async function generarReciboEgreso(req, res) {
     const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
                    'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
 
-    // ── Generar PDF ────────────────────────────────────────────────────────
     const doc    = new PDFDocument({ size: 'A4', layout: 'portrait', margin: 40 })
     const MARGIN = 40
-    const PW     = 515   // ancho útil
+    const PW     = 515   
     const ROJO   = '#CC0000'
     const AZUL   = '#003399'
     const NEGRO  = '#000000'
     const GRIS   = '#666666'
+    
 
+    
     res.setHeader('Content-Type', 'application/pdf')
     res.setHeader('Content-Disposition',
       `attachment; filename=recibo-egreso-${d.codigo_transferencia.replace(/\//g,'-')}.pdf`)
     doc.pipe(res)
 
-    // ── TÍTULO ─────────────────────────────────────────────────────────────
-    doc.rect(MARGIN, 30, PW, 36).fillAndStroke('#FFF0F0', ROJO)
-    doc.fillColor(ROJO).font('Helvetica-Bold').fontSize(16)
-       .text(`RECIBO DE EGRESO N° ${d.codigo_transferencia}`, MARGIN, 42,
-             { width: PW - 120, align: 'center' })
+      const HEADER_H = 56
+      doc.rect(MARGIN, 30, PW, HEADER_H).fillAndStroke('#FFF0F0', ROJO)
 
-    // Cuadro de fecha (arriba derecha)
-    const fx = MARGIN + PW - 110, fy = 30
-    const celdaW = 34, celdaH = 18
-    // Cabecera
-    ;['DÍA','MES','AÑO'].forEach((lbl, i) => {
-      doc.rect(fx + i * celdaW, fy, celdaW, celdaH).fillAndStroke('#003399','#003399')
-      doc.fillColor('#fff').font('Helvetica-Bold').fontSize(7.5)
-         .text(lbl, fx + i * celdaW, fy + 5, { width: celdaW, align: 'center' })
-    })
-    // Valores
-    ;[hoy.dia, hoy.mes, hoy.anio.slice(-2)+'X'].forEach((val, i) => {
-      doc.rect(fx + i * celdaW, fy + celdaH, celdaW, celdaH).fillAndStroke('#FFF0F0', ROJO)
-      doc.fillColor(ROJO).font('Helvetica-Bold').fontSize(9)
-         .text(val, fx + i * celdaW, fy + celdaH + 5, { width: celdaW, align: 'center' })
-    })
+      const logoH = 42
+      const logoY = 33
+      try {
+        doc.image(LOGO_MINISTERIO, MARGIN + 6,  logoY, { height: logoH, fit: [80, logoH] })
+        doc.image(LOGO_PAE,        MARGIN + 94, logoY, { height: logoH, fit: [60, logoH] })
+      } catch (e) {
+        console.warn('No se pudieron cargar los logos:', e.message)
+      }
 
-    let y = 82
+      const fx = MARGIN + PW - 110, fy = 33
+      const celdaW = 34, celdaH = 18
+      ;['DÍA','MES','AÑO'].forEach((lbl, i) => {
+        doc.rect(fx + i * celdaW, fy, celdaW, celdaH).fillAndStroke('#003399','#003399')
+        doc.fillColor('#fff').font('Helvetica-Bold').fontSize(7.5)
+          .text(lbl, fx + i * celdaW, fy + 5, { width: celdaW, align: 'center' })
+      })
+      ;[hoy.dia, hoy.mes, hoy.anio.slice(-2)].forEach((val, i) => {
+        doc.rect(fx + i * celdaW, fy + celdaH, celdaW, celdaH).fillAndStroke('#FFF0F0', ROJO)
+        doc.fillColor(ROJO).font('Helvetica-Bold').fontSize(9)
+          .text(val, fx + i * celdaW, fy + celdaH + 5, { width: celdaW, align: 'center' })
+      })
 
-    // ── DATOS GENERALES ────────────────────────────────────────────────────
+      let y = 96
+
+      doc.fillColor(ROJO).font('Helvetica-Bold').fontSize(14)
+        .text(`RECIBO DE EGRESO N° ${d.codigo_transferencia}`, MARGIN, y, 
+              { width: PW, align: 'center' })
+      y += 22
+
+      doc.rect(MARGIN, y, PW, 1).fill('#d4dae8'); y += 6
+
     const campo = (etiqueta, valor, x, w, yy, color = AZUL) => {
       doc.fillColor(color).font('Helvetica-Bold').fontSize(9)
          .text(etiqueta, x, yy, { lineBreak: false })
@@ -927,7 +938,6 @@ async function generarReciboEgreso(req, res) {
 
     doc.rect(MARGIN, y, PW, 1).fill('#d4dae8'); y += 8
 
-    // ── TABLA DE CONCEPTOS ─────────────────────────────────────────────────
     const thH = 20
     doc.rect(MARGIN, y, PW - 80, thH).fillAndStroke('#003399','#003399')
     doc.rect(MARGIN + PW - 80, y, 80, thH).fillAndStroke('#003399','#003399')
@@ -947,7 +957,6 @@ async function generarReciboEgreso(req, res) {
       y += 22
     }
 
-    // Filas de SIAF / PPTO (referencias que el coordinador llenará)
     doc.rect(MARGIN, y, PW - 80, 22).fillAndStroke('#fff', '#d4dae8')
     doc.rect(MARGIN + PW - 80, y, 80, 22).fillAndStroke('#fff', '#d4dae8')
     doc.fillColor(GRIS).font('Helvetica').fontSize(8)
@@ -964,9 +973,7 @@ async function generarReciboEgreso(req, res) {
        .text('XXXX', MARGIN + PW - 135, y + 3, { lineBreak: false })
     y += 22 + 6
 
-    // ── SECCIÓN ENTREGO / RECIBO ───────────────────────────────────────────
     const boxW = (PW - 12) / 2
-    // ENTREGO - TESORERO
     doc.rect(MARGIN, y, boxW, 44).fillAndStroke('#f7f8fc', '#d4dae8')
     doc.fillColor(AZUL).font('Helvetica-Bold').fontSize(8)
        .text('ENTREGO', MARGIN + 6, y + 6, { lineBreak: false })
@@ -976,7 +983,6 @@ async function generarReciboEgreso(req, res) {
     doc.fillColor(GRIS).font('Helvetica').fontSize(7.5)
        .text(d.tesorero ?? '', MARGIN + 6, y + 38, { width: boxW - 12, align: 'center' })
 
-    // RECIBO - ATC
     doc.rect(MARGIN + boxW + 12, y, boxW, 44).fillAndStroke('#f7f8fc', '#d4dae8')
     doc.fillColor(AZUL).font('Helvetica-Bold').fontSize(8)
        .text('RECIBO', MARGIN + boxW + 18, y + 6, { lineBreak: false })
@@ -987,7 +993,6 @@ async function generarReciboEgreso(req, res) {
        .text(d.atc ?? '', MARGIN + boxW + 14, y + 38, { width: boxW - 12, align: 'center' })
     y += 52
 
-    // ── DETALLES DEL SALDO ─────────────────────────────────────────────────
     doc.rect(MARGIN, y, PW, 1).fill('#d4dae8'); y += 8
 
     campo('el importe de:', `S/ ${fmtMonto(saldoDevolver)}`, col1, PW, y, AZUL); y += lineaH
@@ -998,7 +1003,6 @@ async function generarReciboEgreso(req, res) {
 
     campo('EXPEDIENTE SIAF:', 'XXXX', col1, PW / 2, y); y += lineaH + 4
 
-    // Desglose financiero
     const resumenRow = (lbl, val, color = NEGRO) => {
       doc.rect(MARGIN, y, PW - 80, 16).fillAndStroke('#f7f8fc', '#e5e8f0')
       doc.rect(MARGIN + PW - 80, y, 80, 16).fillAndStroke('#f7f8fc', '#e5e8f0')
@@ -1011,13 +1015,13 @@ async function generarReciboEgreso(req, res) {
 
     resumenRow('Monto transferido',    montoTransf)
     resumenRow('(-) Total gastado',    totalGastado)
-    resumenRow('(-) Efectivo en caja', saldoDevolver)
-    resumenRow('= Saldo a devolver',   montoTransf - totalGastado - saldoDevolver, ROJO)
+    resumenRow('(-) Saldo en Cuenta', saldoDevolver-efectivoEnCaja)
+    resumenRow('(-) Efectivo en caja', efectivoEnCaja)
+    resumenRow('= Saldo a devolver',   saldoDevolver)
 
     y += 8
     doc.rect(MARGIN, y, PW, 1).fill('#d4dae8'); y += 6
 
-    // ── IMPORTE EN LETRAS ──────────────────────────────────────────────────
     doc.rect(MARGIN, y, PW - 80, 22).fillAndStroke('#f0f2f8', '#d4dae8')
     doc.rect(MARGIN + PW - 80, y, 80, 22).fillAndStroke('#f0f2f8', '#d4dae8')
     doc.fillColor(AZUL).font('Helvetica-Bold').fontSize(8)

@@ -27,6 +27,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() })
 })
 app.use('/api/instituciones', require('./routes/instituciones.routes'))
+app.use('/api/coordinador', require('./routes/coordinador.routes'))
 
 app.use((req, res) => {
   res.status(404).json({ error: `Ruta ${req.method} ${req.path} no encontrada` })
