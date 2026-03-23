@@ -1,9 +1,6 @@
 const { getPool, sql } = require('../config/db')
 const PDFDocument = require('pdfkit')
 
-// ─────────────────────────────────────────────────────────────────────────
-//  Query de info de asignación — usada por generarActa y descargarActa
-// ─────────────────────────────────────────────────────────────────────────
 const QUERY_INFO_ASIGNACION = `
   SELECT
     i.nombre  AS institucion,
@@ -34,9 +31,6 @@ const QUERY_INFO_ASIGNACION = `
   WHERE a.id = @aid
 `
 
-// ─────────────────────────────────────────────────────────────────────────
-//  Helper: construye el PDF del acta — compartido por generar y descargar
-// ─────────────────────────────────────────────────────────────────────────
 function _buildActaPdf(res, info, fechaComite, pdfNombre, transferencias) {
   const meses   = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
                    'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
@@ -66,7 +60,6 @@ function _buildActaPdf(res, info, fechaComite, pdfNombre, transferencias) {
        })
   }
 
-  // Título
   doc.fontSize(9).font('Helvetica-Bold').fillColor('black')
      .text('FORMATO N°', { align: 'center' })
      .moveDown(0.4)
@@ -78,7 +71,6 @@ function _buildActaPdf(res, info, fechaComite, pdfNombre, transferencias) {
            50, titleY + 8, { width: pageW, align: 'center' })
   doc.moveDown(2.2)
 
-  // Texto introductorio
   doc.fontSize(10).font('Helvetica').fillColor('black')
   doc.text(
     `En el distrito de ${info.distrito ?? '........................................'}, ` +
@@ -100,7 +92,6 @@ function _buildActaPdf(res, info, fechaComite, pdfNombre, transferencias) {
   const tX = 50, c1 = 250, c2 = 110, c3 = 135, rowH = 22
   let tY = doc.y
 
-  // Tabla rendición
   doc.rect(tX, tY, c1 + c2 + c3, rowH).fillAndStroke('#F1A983', '#F1A983')
   doc.fillColor('white').fontSize(9).font('Helvetica-Bold')
      .text('RENDICIÓN DE CUENTAS', tX, tY + 7, { width: c1 + c2 + c3, align: 'center' })
@@ -130,7 +121,6 @@ function _buildActaPdf(res, info, fechaComite, pdfNombre, transferencias) {
     cell(tX+c1+c2,   tY, c3,  rowH, fmtF(t.fecha_recepcion), { align: 'right' }); tY += rowH
   })
 
-  // Distribución por rubro
   tY += 16
   const rubros = [
     { label: 'Alimentos',  val: info.presup_alimentos  },
@@ -154,7 +144,6 @@ function _buildActaPdf(res, info, fechaComite, pdfNombre, transferencias) {
     })
   }
 
-  // Firma
   tY += 30; doc.y = tY
   doc.moveTo(tX, tY + 40).lineTo(tX + 200, tY + 40).stroke()
   doc.fontSize(9).font('Helvetica-Bold').fillColor('black')
@@ -167,9 +156,6 @@ function _buildActaPdf(res, info, fechaComite, pdfNombre, transferencias) {
   doc.end()
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-//  GET /actas?asignacion_id=X
-// ─────────────────────────────────────────────────────────────────────────
 async function getAll(req, res) {
   const { asignacion_id } = req.query
   if (!asignacion_id) return res.status(400).json({ error: 'asignacion_id requerido' })
@@ -198,9 +184,6 @@ async function getAll(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-//  POST /actas/generar  — solo tesorero
-// ─────────────────────────────────────────────────────────────────────────
 async function generarActa(req, res) {
   const { asignacion_id, fecha_comite } = req.body
   const userId = req.user.id
@@ -211,7 +194,6 @@ async function generarActa(req, res) {
   try {
     const pool = await getPool()
 
-    // ── 1. Info de la asignación (query corregida) ──
     const infoResult = await pool.request()
       .input('aid', sql.Int, asignacion_id)
       .query(QUERY_INFO_ASIGNACION)
@@ -221,7 +203,6 @@ async function generarActa(req, res) {
 
     const info = infoResult.recordset[0]
 
-    // ── 2. Transferencias del ciclo ──
     const transfResult = await pool.request()
       .input('aid', sql.Int, asignacion_id)
       .query(`
@@ -232,7 +213,6 @@ async function generarActa(req, res) {
       `)
     const transferencias = transfResult.recordset
 
-    // ── 3. Guardar registro en PAE_ACTAS ──
     const mesStr    = String(info.mes).padStart(2, '0')
     const pdfNombre = `acta-${info.anio}-${mesStr}-asig${asignacion_id}.pdf`
 
@@ -247,7 +227,6 @@ async function generarActa(req, res) {
         VALUES (@aid, @fecha, @userId, @nombre)
       `)
 
-    // ── 4. Generar y devolver PDF ──
     _buildActaPdf(res, info, fecha_comite, pdfNombre, transferencias)
 
   } catch (err) {
@@ -256,16 +235,12 @@ async function generarActa(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-//  GET /actas/:id/descargar  — atc y tesorero
-// ─────────────────────────────────────────────────────────────────────────
 async function descargarActa(req, res) {
   const actaId = parseInt(req.params.id, 10)
 
   try {
     const pool = await getPool()
 
-    // ── 1. Obtener el registro del acta ──
     const actaRes = await pool.request()
       .input('id', sql.Int, actaId)
       .query(`
@@ -285,7 +260,6 @@ async function descargarActa(req, res) {
 
     const acta = actaRes.recordset[0]
 
-    // ── 2. Info de la asignación ──
     const infoResult = await pool.request()
       .input('aid', sql.Int, acta.asignacion_id)
       .query(QUERY_INFO_ASIGNACION)
@@ -293,7 +267,6 @@ async function descargarActa(req, res) {
     if (!infoResult.recordset[0])
       return res.status(404).json({ error: 'Asignación no encontrada' })
 
-    // ── 3. Transferencias del ciclo ──
     const transfResult = await pool.request()
       .input('aid', sql.Int, acta.asignacion_id)
       .query(`
@@ -303,9 +276,7 @@ async function descargarActa(req, res) {
         ORDER BY numero ASC
       `)
 
-    // ── 4. Regenerar PDF (sin INSERT) ──
     const pdfNombre = acta.pdf_nombre || `acta-${actaId}.pdf`
-    // fecha_comite viene como Date object — convertir a string YYYY-MM-DD
     const fechaStr  = new Date(acta.fecha_comite).toISOString().split('T')[0]
 
     _buildActaPdf(res, infoResult.recordset[0], fechaStr, pdfNombre, transfResult.recordset)

@@ -5,7 +5,6 @@ const archiver         = require('archiver')
 const path             = require('path')
 const fs               = require('fs')
 
-// ── Helpers compartidos con rendiciones.controller ────────────
 const MESES    = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
                   'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
 const fmtFecha = (f) => {
@@ -23,11 +22,6 @@ const TIPO_LABEL = {
   planilla_movilidad: 'PLANILLA MOVILIDAD'
 }
 
-// ============================================================
-//  GET /api/coordinador/transferencias
-//  Todas las transferencias del sistema con contexto completo.
-//  Accesible solo para coordinador_administrativo.
-// ============================================================
 async function getTransferencias(req, res) {
   try {
     const pool = await getPool()
@@ -96,25 +90,7 @@ async function getTransferencias(req, res) {
   }
 }
 
-// ============================================================
-//  GET /api/coordinador/instituciones/:institucion_id/zip
-//
-//  Genera un ZIP con TODOS los documentos de TODAS las
-//  transferencias de esa institución, organizados así:
-//
-//  IE-20124-Senor-de-los-Milagros/
-//    TRF-2025-0001  (Ciclo Enero 2025 · Inicial)/
-//      balance.pdf
-//      dj.pdf
-//      movilidad.pdf
-//      recibo-egreso.pdf
-//      acta.pdf
-//      comprobantes/
-//        01-factura-ARROZ.jpg
-//        02-boleta-GAS.pdf
-//    TRF-2025-0002  (Ciclo Enero 2025 · Primaria)/
-//      ...
-// ============================================================
+
 async function zipInstitucion(req, res) {
   const instId = parseInt(req.params.institucion_id, 10)
 
@@ -248,10 +224,6 @@ async function zipInstitucion(req, res) {
   }
 }
 
-// ============================================================
-//  Generadores de PDF en buffer (reutilizan la lógica de
-//  rendiciones.controller pero retornan Buffer en vez de pipe)
-// ============================================================
 
 function generarAnexo3Buffer(pool, tid) {
   return new Promise(async (resolve, reject) => {
@@ -392,7 +364,6 @@ function generarAnexo3Buffer(pool, tid) {
   })
 }
 
-// ── DJ Buffer (reutiliza lógica de generarDJPdf) ──────────────
 function generarDJBuffer(pool, tid) {
   return new Promise(async (resolve, reject) => {
     try {
@@ -427,7 +398,7 @@ function generarDJBuffer(pool, tid) {
         ORDER BY c.fecha_documento,c.id,g.id`)
 
       const gastos = djRes.recordset
-      if (gastos.length === 0) return resolve(null) // No hay DJ para esta transferencia
+      if (gastos.length === 0) return resolve(null) 
 
       const totalDJ = gastos.reduce((s,g)=>s+Number(g.monto),0)
       const chunks = []
@@ -499,7 +470,6 @@ function generarDJBuffer(pool, tid) {
   })
 }
 
-// ── Movilidad Buffer ──────────────────────────────────────────
 function generarMovilidadBuffer(pool, tid) {
   return new Promise(async (resolve, reject) => {
     try {
@@ -600,7 +570,6 @@ function generarMovilidadBuffer(pool, tid) {
   })
 }
 
-// ── Recibo Buffer (simplificado) ──────────────────────────────
 function generarReciboBuffer(pool, tid) {
   return new Promise(async (resolve, reject) => {
     try {
@@ -675,7 +644,6 @@ function generarReciboBuffer(pool, tid) {
   })
 }
 async function zipInstitucionQuery(req, res) {
-  // Inyecta el query param como si fuera un route param
   req.params.institucion_id = req.query.institucion_id
   return zipInstitucion(req, res)
 }
@@ -714,12 +682,8 @@ async function getInstituciones(req, res) {
   }
 }
  
-// GET /api/coordinador/zip-institucion?institucion_id=N
-// Wrapper que acepta query param en lugar de route param
 async function zipInstitucionQuery(req, res) {
   req.params.institucion_id = req.query.institucion_id
   return zipInstitucion(req, res)
 }
- 
-// ── Reemplazar la línea module.exports por esta: ──────────────
 module.exports = { getTransferencias, getInstituciones, zipInstitucion, zipInstitucionQuery }
