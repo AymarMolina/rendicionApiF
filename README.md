@@ -162,17 +162,3 @@ pae-backend/
 ├── .env                   ← credenciales (no subir a git)
 └── package.json
 ```
-PORT=3000
-
-# SQL Server - site4now
-DB_SERVER=sql8012.site4now.net
-DB_DATABASE=db_a8316a_qaliwarma
-DB_USER=db_a8316a_qaliwarma_admin
-DB_PASSWORD=Pae2026@
-DB_PORT=1433
-DB_ENCRYPT=true
-DB_TRUST_CERT=false
-
-# JWT
-JWT_SECRET=pae_qaliwarma_secret_2026
-JWT_EXPIRES=8h
