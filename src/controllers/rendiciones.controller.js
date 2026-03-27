@@ -106,18 +106,16 @@ async function getByTransferencia(req, res) {
   }
 }
 
-// ── Guardar / actualizar rendición + fecha_limite_rendicion ───────────────
 async function upsert(req, res) {
   const {
     transferencia_id, efectivo_en_caja, observaciones,
-    fecha_limite_rendicion   // ← nuevo campo
+    fecha_limite_rendicion  
   } = req.body
   if (!transferencia_id) return res.status(400).json({ error: 'transferencia_id requerido' })
 
   try {
     const pool = await getPool()
 
-    // Actualizar fecha límite en PAE_TRANSFERENCIAS si se envía
     if (fecha_limite_rendicion) {
       await pool.request()
         .input('tid',   sql.Int,  transferencia_id)
@@ -262,7 +260,6 @@ async function observar(req, res) {
   }
 }
 
-// ── Anexo 3, ZIP y DJ PDF sin cambios ────────────────────────────────────
 async function generarAnexo3(req, res) {
   try {
     const pool = await getPool()
@@ -602,7 +599,6 @@ async function generarMovilidadPdf(req, res) {
     }
     const fmtMonto = (n) => Number(n || 0).toLocaleString('es-PE', { minimumFractionDigits: 2 })
  
-    // Info general de la transferencia
     const infoRes = await pool.request()
       .input('tid', sql.Int, tid)
       .query(`
@@ -626,7 +622,6 @@ async function generarMovilidadPdf(req, res) {
       return res.status(404).json({ error: 'Transferencia no encontrada' })
     const info = infoRes.recordset[0]
  
-    // Todas las planillas de movilidad de esta transferencia
     const movRes = await pool.request()
       .input('tid', sql.Int, tid)
       .query(`
@@ -661,7 +656,6 @@ async function generarMovilidadPdf(req, res) {
       `attachment; filename=movilidad-${info.t_codigo.replace(/\//g,'-')}.pdf`)
     doc.pipe(res)
  
-    // Header institucional
     doc.rect(MARGIN, 12, 100, 32).fill('#c00')
     doc.fillColor('white').fontSize(8).font('Helvetica-Bold').text('PERÚ', MARGIN + 6, 16)
     doc.fontSize(5.5).font('Helvetica').text('Ministerio de Desarrollo', MARGIN + 6, 25).text('e Inclusión Social', MARGIN + 6, 32)
@@ -688,7 +682,6 @@ async function generarMovilidadPdf(req, res) {
     infoBox('CÓDIGO MODULAR:', info.codigo_modular, col1X, colW, y)
     infoBox('AÑO:', String(info.anio), col2X, colW, y); y += 24
  
-    // Nota legal
     doc.rect(MARGIN, y, PW, 0.5).fill('#d4dae8'); y += 6
     doc.fillColor('#444').font('Helvetica-Oblique').fontSize(6.5)
        .text('"La presente planilla sustenta los gastos de transporte realizados para el servicio alimentario PAE, ' +
@@ -702,7 +695,6 @@ async function generarMovilidadPdf(req, res) {
       return
     }
  
-    // Tabla
     const cFe = 52, cPart = 120, cLleg = 120, cMod = 70, cMot = 100
     const cMon = PW - cFe - cPart - cLleg - cMod - cMot
     const tX   = MARGIN
@@ -745,7 +737,7 @@ async function generarMovilidadPdf(req, res) {
       dc(cx, cLleg, m.punto_llegada ?? '');                  cx += cLleg
       dc(cx, cMod,  m.modulo_codigo ?? '', 'center');        cx += cMod
       dc(cx, cMot,  m.motivo ?? m.concepto ?? '');           cx += cMot
-      // Monto en bold
+
       doc.rect(cx, y, cMon, rowH).fill(bg)
       doc.rect(cx, y, cMon, rowH).stroke('#d4dae8')
       doc.fillColor('#1a2340').font('Helvetica-Bold').fontSize(6.5)
@@ -753,7 +745,6 @@ async function generarMovilidadPdf(req, res) {
       y += rowH
     })
  
-    // Fila de total
     if (y > 760) { doc.addPage(); y = MARGIN }
     const wLabel = cFe + cPart + cLleg + cMod + cMot
     doc.rect(tX, y, wLabel, rowH).fillAndStroke(ORNG, ORNG)
@@ -764,7 +755,6 @@ async function generarMovilidadPdf(req, res) {
        .text(`S/ ${fmtMonto(totalMov)}`, tX + wLabel + 2, y + (rowH - 8) / 2, { width: cMon - 4, align: 'right', lineBreak: false })
     y += rowH + 30
  
-    // Firma
     const sW = 200, sX = MARGIN + (PW - sW) / 2
     doc.moveTo(sX, y + 28).lineTo(sX + sW, y + 28).stroke()
     doc.fillColor('#1a2340').font('Helvetica-Bold').fontSize(8)

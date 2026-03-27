@@ -1,4 +1,3 @@
-// coordinador.controller.js
 const { getPool, sql } = require('../config/db')
 const PDFDocument      = require('pdfkit')
 const archiver         = require('archiver')
@@ -97,7 +96,6 @@ async function zipInstitucion(req, res) {
   try {
     const pool = await getPool()
 
-    // 1. Info de la institución
     const instRes = await pool.request()
       .input('id', sql.Int, instId)
       .query(`SELECT id, nombre, codigo FROM EQRENDICION.PAE_INSTITUCIONES WHERE id = @id`)
@@ -106,7 +104,6 @@ async function zipInstitucion(req, res) {
       return res.status(404).json({ error: 'Institución no encontrada' })
     const inst = instRes.recordset[0]
 
-    // 2. Todas las transferencias de la institución que tengan rendición
     const transfRes = await pool.request()
       .input('instId', sql.Int, instId)
       .query(`
@@ -137,7 +134,6 @@ async function zipInstitucion(req, res) {
     if (transferencias.length === 0)
       return res.status(404).json({ error: 'No hay transferencias para esta institución' })
 
-    // 3. Preparar respuesta ZIP
     const instSlug = `${inst.codigo}-${inst.nombre.substring(0, 40).replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '-')}`
     res.setHeader('Content-Type', 'application/zip')
     res.setHeader('Content-Disposition', `attachment; filename=${instSlug}.zip`)
@@ -148,37 +144,31 @@ async function zipInstitucion(req, res) {
 
     const uploadsBase = path.join(__dirname, '..', '..', 'uploads')
 
-    // 4. Por cada transferencia, generar sus documentos y añadirlos al ZIP
     for (const t of transferencias) {
       const carpeta = `${inst.codigo}/${t.codigo}_${t.ciclo}_${t.nivel}`
 
-      // ── 4a. Balance de Gastos (Anexo 3) ──────────────────
       if (t.rendicion_id) {
         try {
           const pdfBalance = await generarAnexo3Buffer(pool, t.tid)
           if (pdfBalance) archive.append(pdfBalance, { name: `${carpeta}/balance-gastos.pdf` })
         } catch (e) { console.error('balance error:', e.message) }
 
-        // ── 4b. Declaraciones Juradas ──────────────────────
         try {
           const pdfDJ = await generarDJBuffer(pool, t.tid)
           if (pdfDJ) archive.append(pdfDJ, { name: `${carpeta}/declaraciones-juradas.pdf` })
         } catch (e) { console.error('dj error:', e.message) }
 
-        // ── 4c. Planilla de Movilidad ──────────────────────
         try {
           const pdfMov = await generarMovilidadBuffer(pool, t.tid)
           if (pdfMov) archive.append(pdfMov, { name: `${carpeta}/planilla-movilidad.pdf` })
         } catch (e) { console.error('movilidad error:', e.message) }
 
-        // ── 4d. Recibo de Egreso ───────────────────────────
         try {
           const pdfRecibo = await generarReciboBuffer(pool, t.tid)
           if (pdfRecibo) archive.append(pdfRecibo, { name: `${carpeta}/recibo-egreso.pdf` })
         } catch (e) { console.error('recibo error:', e.message) }
       }
 
-      // ── 4e. Acta de Comité ─────────────────────────────
       try {
         const actaRes = await pool.request()
           .input('aid', sql.Int, t.asignacion_id)
@@ -190,7 +180,6 @@ async function zipInstitucion(req, res) {
         }
       } catch (e) { console.error('acta error:', e.message) }
 
-      // ── 4f. Comprobantes adjuntos ──────────────────────
       try {
         const compRes = await pool.request()
           .input('tid', sql.Int, t.tid)
@@ -223,7 +212,6 @@ async function zipInstitucion(req, res) {
     if (!res.headersSent) res.status(500).json({ error: 'Error al generar ZIP' })
   }
 }
-
 
 function generarAnexo3Buffer(pool, tid) {
   return new Promise(async (resolve, reject) => {
@@ -273,7 +261,6 @@ function generarAnexo3Buffer(pool, tid) {
       doc.on('end', () => resolve(Buffer.concat(chunks)))
       doc.on('error', reject)
 
-      // Header
       doc.rect(MARGIN, 12, 100, 32).fill('#c00')
       doc.fillColor('white').fontSize(8).font('Helvetica-Bold').text('PERÚ', MARGIN + 6, 16)
       doc.fontSize(5.5).font('Helvetica').text('Ministerio de Desarrollo', MARGIN + 6, 25).text('e Inclusión Social', MARGIN + 6, 32)
@@ -347,7 +334,6 @@ function generarAnexo3Buffer(pool, tid) {
         y += rowH
       })
 
-      // Fila total
       let cx = MARGIN
       ;[cN,cDet,cTipo,cDoc,cFech,cRub].forEach(w => { doc.rect(cx,y,w,rowH).fillAndStroke(ORNG,ORNG); cx+=w })
       doc.fillColor('white').font('Helvetica-Bold').fontSize(7.5).text('TOTAL',MARGIN+3,y+4,{width:cN+cDet+cTipo+cDoc+cFech+cRub-6,align:'right',lineBreak:false})

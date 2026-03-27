@@ -20,7 +20,6 @@ async function validarPresupuesto(pool, transferenciaId, rubro, montoNuevo, comp
 
   const presupuesto = presResult.recordset[0]?.presupuesto ?? 0
 
-  // -- Gasto total del rubro (todos los comprobantes)
   let gastadoQuery = `
     SELECT COALESCE(SUM(g.monto), 0) AS gastado
     FROM EQRENDICION.PAE_GASTOS g
@@ -29,7 +28,6 @@ async function validarPresupuesto(pool, transferenciaId, rubro, montoNuevo, comp
   `
   if (comprobanteIdExcluir) gastadoQuery += ` AND c.id <> @excluir`
 
-  // -- Gasto DJ del rubro (solo comprobantes sin RUC)
   let djQuery = `
     SELECT COALESCE(SUM(g.monto), 0) AS gastado_dj
     FROM EQRENDICION.PAE_GASTOS g

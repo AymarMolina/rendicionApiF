@@ -5,14 +5,13 @@ const { calcularFechaLimite, parseExcelDate }  = require('../utils/fechas')  // 
 const ENTREGAS_MESES = [5, 6, 7, 8, 9, 10]
 const NOMBRES_MESES  = ['Mayo','Junio','Julio','Agosto','Septiembre','Octubre']
 
-// Índices 0-based de FECHA_INICIO y FECHA_FIN por entrega en el Excel
 const FECHA_COLS = [
-  { fi: 57, ff: 58 },  // PRIMERA
-  { fi: 59, ff: 60 },  // SEGUNDA
-  { fi: 61, ff: 62 },  // TERCERA
-  { fi: 63, ff: 64 },  // CUARTA
-  { fi: 65, ff: 66 },  // QUINTA
-  { fi: 67, ff: 68 },  // SEXTA
+  { fi: 57, ff: 58 },  
+  { fi: 59, ff: 60 }, 
+  { fi: 61, ff: 62 }, 
+  { fi: 63, ff: 64 },  
+  { fi: 65, ff: 66 },  
+  { fi: 67, ff: 68 },  
 ]
 
 function ultimoDia(anio, mes) {
@@ -35,7 +34,6 @@ async function importarTransferencias(req, res) {
 
     logs.push(`Excel leído: ${dataRows.length} módulos`)
 
-    // Leer fechas de la primera fila — son iguales para todas las IEs
     const primeraFila    = dataRows[0]
     const fechasEntregas = FECHA_COLS.map(({ fi, ff }) => ({
       fecha_inicio: parseExcelDate(primeraFila[fi]),
@@ -43,7 +41,6 @@ async function importarTransferencias(req, res) {
     }))
     logs.push(`Fechas: ${fechasEntregas.map(f => `${f.fecha_inicio}→${f.fecha_fin}`).join(' | ')}`)
 
-    // Crear/actualizar los 6 ciclos con las fechas reales del Excel
     const cicloIds = {}
     const ciclosEx = await pool.request()
       .input('anio', sql.SmallInt, anio)
@@ -82,7 +79,6 @@ async function importarTransferencias(req, res) {
       logs.push(`  Ciclo ${nombre}: creado (${fi} → ${ff})`)
     }
 
-    // ── 3. Leer módulos existentes en BD de una sola vez ─────────────────
     const modsEx = await pool.request().query(`
       SELECT m.id, m.codigo_modular, m.institucion_id
       FROM EQRENDICION.PAE_MODULOS m
@@ -90,14 +86,12 @@ async function importarTransferencias(req, res) {
     const moduloMap = {}
     modsEx.recordset.forEach(m => { moduloMap[m.codigo_modular] = m.id })
 
-    // Leer instituciones existentes
     const instEx = await pool.request().query(`
       SELECT id, codigo FROM EQRENDICION.PAE_INSTITUCIONES
     `)
     const instMap = {}
     instEx.recordset.forEach(i => { instMap[i.codigo] = i.id })
 
-    // Leer asignaciones existentes
     const asigEx = await pool.request().query(`
       SELECT id, ciclo_id, modulo_id, num_transferencias_excel, monto_x_transf_excel
       FROM EQRENDICION.PAE_ASIGNACIONES
@@ -105,11 +99,10 @@ async function importarTransferencias(req, res) {
     const asigMap = {}
     asigEx.recordset.forEach(a => { asigMap[`${a.ciclo_id}_${a.modulo_id}`] = a.id })
 
-    // ── 4. Procesar filas y acumular inserts/updates ──────────────────────
-    const institucionesACrear = []  // { codigo, nombre }
-    const modulosACrear       = []  // { codigo, nivelRaw, nombreIE, codInst }
-    const asignacionesACrear  = []  // { cicloId, moduloCod, rubros..., nt, mxt }
-    const asignacionesAActualizar = [] // { id, rubros..., nt, mxt }
+    const institucionesACrear = []  
+    const modulosACrear       = []  
+    const asignacionesACrear  = [] 
+    const asignacionesAActualizar = [] 
 
     for (const row of dataRows) {
       const numFila    = row[0]
@@ -123,7 +116,6 @@ async function importarTransferencias(req, res) {
         continue
       }
 
-      // Registrar institución/módulo a crear si no existen
       if (!instMap[codModular] && !institucionesACrear.find(x => x.codigo === codModular)) {
         institucionesACrear.push({ codigo: codModular, nombre: nombreIE || codModular })
       }
@@ -131,7 +123,6 @@ async function importarTransferencias(req, res) {
         modulosACrear.push({ codigo: codModular, nivel, nombreIE, codInst: codModular })
       }
 
-      // Por cada entrega
       for (let i = 0; i < 6; i++) {
         const pa  = Number(row[9  + i] ?? 0)
         const ptr = Number(row[15 + i] ?? 0)
@@ -147,7 +138,7 @@ async function importarTransferencias(req, res) {
         if (nt === 0) continue
 
         const cicloId = cicloIds[i]
-        const key     = `${cicloId}_${codModular}` // temporal, se resuelve después
+        const key     = `${cicloId}_${codModular}` 
 
         asignacionesACrear.push({
           cicloId, codModular, nivel,
@@ -156,7 +147,6 @@ async function importarTransferencias(req, res) {
       }
     }
 
-    // ── 5. Crear instituciones faltantes en batch ─────────────────────────
     for (const inst of institucionesACrear) {
       const r = await pool.request()
         .input('cod',    sql.VarChar, inst.codigo)
@@ -169,7 +159,6 @@ async function importarTransferencias(req, res) {
       instMap[r.recordset[0].codigo] = r.recordset[0].id
     }
 
-    // ── 6. Crear módulos faltantes en batch ───────────────────────────────
     for (const mod of modulosACrear) {
       const instId = instMap[mod.codInst]
       if (!instId) continue
@@ -186,8 +175,6 @@ async function importarTransferencias(req, res) {
       moduloMap[r.recordset[0].codigo_modular] = r.recordset[0].id
     }
 
-    // ── 7. Crear/actualizar asignaciones con tabla temporal ───────────────
-    // Agrupar asignaciones a crear vs actualizar
     const toInsert = []
     const toUpdate = []
 
@@ -199,11 +186,11 @@ async function importarTransferencias(req, res) {
         toUpdate.push({ id: asigMap[key], ...a, moduloId })
       } else {
         toInsert.push({ ...a, moduloId })
-        asigMap[key] = -1 // marca para no duplicar
+        asigMap[key] = -1 
       }
     }
 
-    // Bulk insert de asignaciones nuevas en lotes de 50 filas (sin tabla temporal)
+    
     if (toInsert.length > 0) {
       const LOTE = 50
       for (let start = 0; start < toInsert.length; start += LOTE) {
@@ -237,8 +224,6 @@ async function importarTransferencias(req, res) {
       logs.push(`  ${toInsert.length} asignaciones creadas`)
     }
 
-    // Bulk update de asignaciones existentes en lotes de 50
-    // Usa INSERT en tabla de valores + UPDATE con JOIN (más limpio que CASE WHEN)
     if (toUpdate.length > 0) {
       const LOTE = 50
       for (let start = 0; start < toUpdate.length; start += LOTE) {
@@ -292,8 +277,7 @@ async function importarTransferencias(req, res) {
 
   } catch (err) {
     console.error('ERROR importarTransferencias:', err.message, err.stack)
-    // Limpiar tabla temporal si quedó colgada
-    // sin tabla temporal que limpiar
+
     res.status(500).json({ error: 'Error al importar: ' + err.message, logs, errores })
   }
 }
@@ -386,7 +370,6 @@ async function liberarCiclo(req, res) {
   const omitidos = []
 
   try {
-    // ── 1. Traer fechas del ciclo para calcular fecha_limite ─────────────
     const cicloRes = await pool.request()
       .input('cid', sql.Int, cicloId)
       .query(`SELECT anio, mes, fecha_inicio, fecha_fin FROM EQRENDICION.PAE_CICLOS WHERE id = @cid`)
@@ -397,7 +380,6 @@ async function liberarCiclo(req, res) {
     const { anio, mes, fecha_inicio, fecha_fin } = cicloRes.recordset[0]
     const mesPad = String(mes).padStart(2,'0')
 
-    // ── 2. Obtener códigos modulares de todas las asignaciones ───────────
     const asigIds = modulos.map(m => m.asignacion_id).filter(Boolean)
     if (!asigIds.length)
       return res.status(400).json({ error: 'Sin asignaciones válidas' })
@@ -412,11 +394,9 @@ async function liberarCiclo(req, res) {
       JOIN EQRENDICION.PAE_MODULOS m ON m.id = a.modulo_id
       WHERE a.id IN (${placeholders})
     `)
-    // ← aquí se define codMap
     const codMap = {}
     codsRes.recordset.forEach(r => { codMap[r.id] = r.codigo_modular })
 
-    // ── 3. Obtener transferencias ya existentes ──────────────────────────
     const reqEx = pool.request()
     asigIds.forEach((id, i) => reqEx.input(`id${i}`, sql.Int, id))
     const existRes = await reqEx.query(`
@@ -425,11 +405,9 @@ async function liberarCiclo(req, res) {
       WHERE asignacion_id IN (${placeholders})
       GROUP BY asignacion_id
     `)
-    // ← aquí se define existMap
     const existMap = {}
     existRes.recordset.forEach(r => { existMap[r.asignacion_id] = r.cnt })
 
-    // ── 4. Procesar cada módulo ──────────────────────────────────────────
     for (const mod of modulos) {
       const {
         asignacion_id, num_transferencias, monto_x_transferencia,
@@ -442,7 +420,6 @@ async function liberarCiclo(req, res) {
         continue
       }
 
-      // Actualizar presupuestos editados en el modal
       const montoTotal = Number(presup_alimentos  || 0) + Number(presup_transporte || 0) +
                          Number(presup_gas         || 0) + Number(presup_estipendio || 0) +
                          Number(presup_limpieza    || 0) + Number(presup_otros      || 0)
@@ -471,7 +448,6 @@ async function liberarCiclo(req, res) {
       const codModular = codMap[asignacion_id] ?? String(asignacion_id)
       const yaExisten  = existMap[asignacion_id] ?? 0
 
-      // ── 5. Crear transferencias faltantes con fecha_limite calculada ───
       for (let t = yaExisten + 1; t <= num_transferencias; t++) {
         const codigo       = `TRF-${anio}-${mesPad}-${codModular}-T${t}`
         const fecha_limite = calcularFechaLimite(fecha_inicio, fecha_fin, t, num_transferencias)
